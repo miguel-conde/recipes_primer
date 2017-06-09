@@ -1,0 +1,168 @@
+---
+title: "Recipes package"
+author: "Miguel Conde"
+date: "9 de junio de 2017"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE)
+```
+
+https://topepo.github.io/recipes/index.html
+
+```{r}
+if (!require(recipes)) {
+  if (packageVersion("devtools") < 1.6) {
+    install.packages("devtools")
+  }
+  devtools::install_github("topepo/recipes")
+  require(recipes)
+}
+```
+
+The idea of the recipes package is to define a recipe or blueprint that can be used to sequentially define the encodings and preprocessing of the data (i.e. “feature engineering”). For example, to create a simple recipe containing only an outcome and predictors and have the predictors centered and scaled:
+
+```{r}
+library(recipes)
+library(mlbench)
+data(Sonar)
+sonar_rec <- recipe(Class ~ ., data = Sonar) %>%
+  step_center(all_predictors()) %>%
+  step_scale(all_predictors())
+```
+
+The recipes package can be used to create design matrices for modeling and to conduct preprocessing of variables. It is meant to be a more extensive framework that R's formula method. Some differences between simple formula methods and recipes are that
+
+* Variables can have arbitrary roles in the analysis beyond predictors and outcomes.
+
+* A recipe consists of one or more steps that define actions on the variables.
+
+* Recipes can be defined sequentially using pipes as well as being modifiable and extensible.
+
+# Basic Functions
+The three main functions are `recipe`, `prepare`, and `bake`. `recipe` defines the operations on the data and the associated roles. Once the preprocessing steps are defined, any parameters are estimated using `prepare`. Once the data are ready for transformation, the `bake` function applies the operations.
+
+# Step Functions
+These functions are used to add new actions to the recipe and have the naming convention "step_action". For example, `step_center` centers the data to have a zero mean and `step_dummy` is used to create dummy variables.
+
+# A simple example
+First, some definitions are required:
+
+* **variables** are the original (raw) data columns in a data frame or tibble. For example, in a traditional formula Y ~ A + B + A:B, the variables are A, B, and Y.
+* **roles** define how variables will be used in the model. Examples are: predictor (independent variables), response, and case weight. This is meant to be open-ended and extensible.
+* **terms** are columns in a design matrix such as A, B, and A:B. These can be other derived entities that are grouped such a a set of principal components or a set of columns that define a basis function for a variable. These are synonymous with features in machine learning. Variables that have predictor roles would automatically be main effect terms
+
+For our example, the cell segmentation data will be used. It has 58 predictor columns, a factor variable Class (the outcome), and two extra labelling columns. Each of the predictors has a suffix for the optical channel ("Ch1"-"Ch4"). We will first separate the data into a training and test set then remove unimportant variables:
+
+```{r}
+library(caret)
+data(segmentationData)
+library(dplyr)
+
+seg_train <- segmentationData %>% 
+  filter(Case == "Train") %>% 
+  select(-Case, -Cell)
+seg_test  <- segmentationData %>% 
+  filter(Case == "Test")  %>% 
+  select(-Case, -Cell)
+```
+
+The idea is that *the preprocessing operations will all be created using the training set and then these steps will be applied to both the training and test set*.
+
+## An Initial Recipe
+For a first recipe, let’s plan on centering and scaling the predictors. First, we will create a recipe from the original data and then specify the processing steps.
+
+Recipes can be created manually by sequentially adding roles to variables in a data set.
+
+If the analysis only required outcomes and predictors, the easiest way to create the initial recipe is to use the standard formula method:
+```{r}
+library(recipes)
+rec_obj <- recipe(Class ~ ., data = seg_train)
+rec_obj
+```
+
+## Preprocessing Steps
+
+From here, preprocessing steps can be added sequentially in one of two ways:
+
+```
+rec_obj <- step_name(rec_obj, arguments)    ## or
+rec_obj <- rec_obj %>% step_name(arguments)
+```
+
+step_center and the other functions will always return updated recipes.
+
+One other important facet of the code is the method for specifying which variables should be used in different steps. The manual page ?selections has more details but dplyr-like selector functions can be used:
+
+* use basic variable names (e.g. x1, x2),
+* dplyr functions for selecting variables: contains, ends_with, everything, matches, num_range, and starts_with,
+* functions that subset on the role of the variables that have been specified so far: all_outcomes, all_predictors, has_role, or
+similar functions for the type of data: all_nominal, all_numeric, and has_type.
+
+Note that the functions listed above are the only ones that can be used to selecto variables inside the steps. Also, minus signs can be used to deselect variables.
+
+For our data, we can add the two operations for all of the predictors:
+
+```{r}
+standardized <- rec_obj %>%
+  step_center(all_predictors()) %>%
+  step_scale(all_predictors()) 
+standardized
+```
+
+If this is the only preprocessing steps for the predictors, we can now estimate the means and standard deviations from the training set. The prepare function is used with a recipe and a data set:
+
+```{r}
+trained_rec <- prepare(standardized, training = seg_train)
+```
+
+
+Now that the statistics have been estimated, the preprocessing can be applied to the training and test set:
+```{r}
+train_data <- bake(trained_rec, newdata = seg_train)
+test_data  <- bake(trained_rec, newdata = seg_test)
+test_data
+```
+
+
+bake returns a tibble:
+
+```{r}
+class(test_data)
+```
+
+## Adding Steps
+After exploring the data, more preprocessing might be required. Steps can be added to the trained recipe. Suppose that we need to create PCA components but only from the predictors from channel 1 and any predictors that are areas:
+
+
+```{r}
+trained_rec <- trained_rec %>%
+  step_pca(ends_with("Ch1"), contains("area"), num = 5)
+trained_rec
+```
+
+Note that only the last step has been estimated; the first two were previously trained and these activities are not duplicated. We can add the PCA estimates using prepare again:
+
+```{r}
+trained_rec <- prepare(trained_rec, training = seg_train)
+```
+
+
+bake can be reapplied to get the principal components in addition to the other variables:
+
+```{r}
+test_data  <- bake(trained_rec, newdata = seg_test)
+names(test_data)
+```
+
+Note that the PCA components have replaced the original variables that were from channel 1 or measured an area aspect of the cells.
+
+There are a number of different steps included in the package:
+
+```{r}
+steps <- apropos("^step_")
+steps[!grepl("new$", steps)]
+```
+
+
